@@ -44,13 +44,13 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
-public class SSLTransportNetty4 extends Netty4HttpServerTransport {
+public class SSLNetty4HttpServerTransport extends Netty4HttpServerTransport {
 
-  private final BasicSettings basicSettings;
+  private final BasicSettings.SSLSettings sslSettings;
   private final LoggerShim logger;
   private final Environment environment;
 
-  public SSLTransportNetty4(Settings settings, NetworkService networkService, BigArrays bigArrays,
+  public SSLNetty4HttpServerTransport(Settings settings, NetworkService networkService, BigArrays bigArrays,
                             ThreadPool threadPool, NamedXContentRegistry xContentRegistry, Dispatcher dispatcher, Environment environment) {
     super(settings, networkService, bigArrays, threadPool, xContentRegistry, dispatcher);
     this.logger = ESContextImpl.mkLoggerShim(Loggers.getLogger(getClass().getName()));
@@ -61,9 +61,15 @@ public class SSLTransportNetty4 extends Netty4HttpServerTransport {
       this.environment.configFile().toAbsolutePath(),
       settings
     );
-    this.basicSettings = basicSettings;
-    if (this.basicSettings.isSSLEnabled()) {
-      logger.info("creating SSL transport");
+
+    if(basicSettings.getSslHttpSettings().isPresent()) {
+      sslSettings = basicSettings.getSslHttpSettings().get();
+      if (sslSettings.isSSLEnabled()) {
+        logger.info("creating SSL HTTP transport");
+      }
+    }
+    else {
+      sslSettings = null;
     }
   }
 
@@ -72,7 +78,7 @@ public class SSLTransportNetty4 extends Netty4HttpServerTransport {
       return;
     }
     if (cause.getCause() instanceof NotSslRecordException) {
-      logger.warn(cause.getMessage());
+      logger.warn(cause.getMessage() + " connecting from: "+ ctx.channel().remoteAddress());
     }
     else {
       cause.printStackTrace();
@@ -89,9 +95,9 @@ public class SSLTransportNetty4 extends Netty4HttpServerTransport {
     private Optional<SslContext> context = Optional.empty();
 
     SSLHandler(final Netty4HttpServerTransport transport) {
-      super(transport, SSLTransportNetty4.this.detailedErrorsEnabled, SSLTransportNetty4.this.threadPool.getThreadContext());
+      super(transport, SSLNetty4HttpServerTransport.this.detailedErrorsEnabled, SSLNetty4HttpServerTransport.this.threadPool.getThreadContext());
 
-      new SSLCertParser(basicSettings, logger, (certChain, privateKey) -> {
+      new SSLCertParser(sslSettings, logger, (certChain, privateKey) -> {
         try {
           // #TODO expose configuration of sslPrivKeyPem password? Letsencrypt never sets one..
           SslContextBuilder sslCtxBuilder = SslContextBuilder.forServer(
@@ -100,20 +106,20 @@ public class SSLTransportNetty4 extends Netty4HttpServerTransport {
             null
           );
 
-          logger.info("ROR SSL: Using SSL provider: " + SslContext.defaultServerProvider().name());
-          SSLCertParser.validateProtocolAndCiphers(sslCtxBuilder.build().newEngine(ByteBufAllocator.DEFAULT), logger, basicSettings);
+          logger.info("ROR SSL HTTP: Using SSL provider: " + SslContext.defaultServerProvider().name());
+          SSLCertParser.validateProtocolAndCiphers(sslCtxBuilder.build().newEngine(ByteBufAllocator.DEFAULT), logger, sslSettings);
 
-          basicSettings.getAllowedSSLCiphers().ifPresent(sslCtxBuilder::ciphers);
+          sslSettings.getAllowedSSLCiphers().ifPresent(sslCtxBuilder::ciphers);
 
-          basicSettings.getAllowedSSLProtocols()
-            .map(protoList -> protoList.toArray(new String[protoList.size()]))
-            .ifPresent(sslCtxBuilder::protocols);
+          sslSettings.getAllowedSSLProtocols()
+                     .map(protoList -> protoList.toArray(new String[protoList.size()]))
+                     .ifPresent(sslCtxBuilder::protocols);
 
           context = Optional.of(sslCtxBuilder.build());
 
         } catch (Exception e) {
           context = Optional.empty();
-          logger.error("Failed to load SSL CertChain & private key from Keystore! "
+          logger.error("Failed to load SSL HTTP CertChain & private key from Keystore! "
                          + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
         }
       });
