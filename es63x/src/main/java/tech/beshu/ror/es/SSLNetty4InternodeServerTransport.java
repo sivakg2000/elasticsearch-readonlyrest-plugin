@@ -21,8 +21,12 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslHandler;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.network.NetworkService;
@@ -36,7 +40,9 @@ import tech.beshu.ror.commons.SSLCertParser;
 import tech.beshu.ror.commons.settings.BasicSettings;
 import tech.beshu.ror.commons.shims.es.LoggerShim;
 
+import javax.net.ssl.SSLEngine;
 import java.io.ByteArrayInputStream;
+import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
@@ -65,21 +71,33 @@ public class SSLNetty4InternodeServerTransport extends Netty4Transport {
       this.sslSettings = null;
     }
   }
+
   @Override
   protected ChannelHandler getClientChannelInitializer() {
-    return new SSLClientChannelInitializer();
-  }
+    final boolean verifyHostname;
 
-  protected class SSLClientChannelInitializer extends Netty4Transport.ClientChannelInitializer {
-    @Override
-    protected void initChannel(Channel ch) throws Exception {
-      super.initChannel(ch);
-    }
+    return new Netty4Transport.ClientChannelInitializer() {
 
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-      super.exceptionCaught(ctx, cause);
-    }
+      @Override
+      protected void initChannel(Channel ch) throws Exception {
+        super.initChannel(ch);
+        SslContext sslCtx = SslContextBuilder.forClient().trustManager(InsecureTrustManagerFactory.INSTANCE).build();
+        ch.pipeline().addFirst(new ChannelOutboundHandlerAdapter() {
+          @Override
+          public void connect(ChannelHandlerContext ctx, SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) throws Exception {
+            SSLEngine sslEngine = sslCtx.newEngine(ctx.alloc());
+            sslEngine.setUseClientMode(true);
+            ctx.pipeline().replace(this, "internode_ssl_client", new SslHandler(sslEngine));
+            super.connect(ctx, remoteAddress, localAddress, promise);
+          }
+        });
+      }
+
+      @Override
+      public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        super.exceptionCaught(ctx, cause);
+      }
+    };
   }
 
   @Override
@@ -107,7 +125,7 @@ public class SSLNetty4InternodeServerTransport extends Netty4Transport {
               null
           );
 
-          logger.info("ROR SSL TXP: Using SSL provider: " + SslContext.defaultServerProvider().name());
+          logger.info("ROR Internode SSL: Using SSL provider: " + SslContext.defaultServerProvider().name());
           SSLCertParser.validateProtocolAndCiphers(sslCtxBuilder.build().newEngine(ByteBufAllocator.DEFAULT), logger, sslSettings);
 
           sslSettings.getAllowedSSLCiphers().ifPresent(sslCtxBuilder::ciphers);
