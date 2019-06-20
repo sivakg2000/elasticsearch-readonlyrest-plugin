@@ -159,6 +159,14 @@ public class IndexLevelActionFilter implements ActionFilter {
     boolean chanNull = channel == null;
     boolean reqNull = channel == null ? true : channel.request() == null;
     if (shouldSkipACL(chanNull, reqNull)) {
+
+      if (request instanceof SearchRequest) {
+        SearchRequest oldReq = (SearchRequest) request;
+        MyUtils bUtil = new MyUtils(logger);
+        bUtil.updatedSearchRequest(oldReq);
+
+    }
+
       chain.proceed(task, action, request, listener);
       return;
     }
